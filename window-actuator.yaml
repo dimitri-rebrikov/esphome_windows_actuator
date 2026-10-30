@@ -1,0 +1,230 @@
+# =============================================================================
+# Window actuator — ESPHome firmware
+# =============================================================================
+# Migration of the Tasmota-based project (tasmota_window_actuator). The
+# hardware is UNCHANGED; only the firmware changes from Tasmota to ESPHome.
+#
+# Communication with home automation: ESPHome native API ONLY.
+#   - `api:` enabled (Home Assistant autodiscovers the device).
+#   - `mqtt:` intentionally absent.
+#   - Web server intentionally absent.
+#
+# Hardware (see README.md for the full table and the circuit diagram):
+#   WeMos D1 mini + 4-channel relay module (active-low) + 2 buttons + WS2812b.
+#     GPIO4 (D2) -> Relay1 = power relay + motor on/off relay     ("run")
+#     GPIO5 (D1) -> Relay2 = direction/polarity relay             ("direction")
+#     GPIO2 (D4) -> WS2812b data
+#     GPIO12 (D6) -> OPEN button   (active-low, external 4.7k pull-up)
+#     GPIO13 (D7) -> CLOSE button  (active-low, external 4.7k pull-up)
+# =============================================================================
+
+substitutions:
+  name: window-actuator
+  friendly_name: "Window Actuator"
+  # Full-travel times read from the live device:
+  # Tasmota ShutterOpenDuration1 4.0 / ShutterCloseDuration1 6.0.
+  open_time: 4s
+  close_time: 6s
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  comment: "12 V linear window actuator (WeMos D1 mini + 4-relay module)"
+  on_boot:
+    then:
+      - script.execute: update_status_led
+
+esp8266:
+  board: d1_mini
+
+logger:
+
+# -----------------------------------------------------------------------------
+# Wi-Fi — credentials live in secrets.yaml (see secrets.yaml.example).
+# The fallback hotspot is only used for the very first provisioning.
+# -----------------------------------------------------------------------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback Hotspot"
+    password: !secret fallback_password
+
+# -----------------------------------------------------------------------------
+# ESPHome native API — the only channel to home automation.
+# No `mqtt:` block on purpose: this device never speaks MQTT.
+# -----------------------------------------------------------------------------
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# -----------------------------------------------------------------------------
+# Over-the-air updates (device management; not a home-automation channel).
+# Reuses the native-API encryption key (one key protects the device).
+# -----------------------------------------------------------------------------
+ota:
+  - platform: esphome
+    encryption:
+
+# -----------------------------------------------------------------------------
+# Captive portal — only active while the fallback hotspot is up (Wi-Fi
+# recovery). Not a home-automation channel: it serves no data when the device
+# is joined to the network.
+# -----------------------------------------------------------------------------
+captive_portal:
+
+# -----------------------------------------------------------------------------
+# Relay outputs (internal — not exposed to Home Assistant).
+#
+# The relay board is ACTIVE-LOW ("Relay_i" in Tasmota): GPIO LOW energises the
+# relay. `inverted: true` makes "output on" == "relay energised".
+# -----------------------------------------------------------------------------
+output:
+  - platform: gpio
+    id: run_relay
+    pin:
+      number: GPIO4       # Tasmota Relay1 — ON for both open and close (power)
+      inverted: true
+
+  - platform: gpio
+    id: direction_relay
+    pin:
+      number: GPIO5       # Tasmota Relay2 — OFF=open, ON=close (direction)
+      inverted: true
+
+# -----------------------------------------------------------------------------
+# Cover (time-based position tracking, circuit-safe relay topology).
+#
+# Sequence is exactly Tasmota ShutterMode 2: set direction first, wait for the
+# direction relay to settle, then energise the power relay. 100 ms mirrors
+# Tasmota's SHUTTER_RELAY_OPERATION_TIME.
+# -----------------------------------------------------------------------------
+cover:
+  - platform: time_based
+    id: window_cover
+    name: "Window"
+    device_class: window
+
+    open_duration: ${open_time}
+    close_duration: ${close_time}
+
+    # NOTE: if the window moves in the WRONG direction, swap the direction
+    # relay state between open_action and close_action below (i.e. change
+    # `direction_relay` OFF<->ON in the two blocks).
+    open_action:
+      - output.turn_off: run_relay       # ensure stopped
+      - output.turn_off: direction_relay # open polarity
+      - delay: 100ms
+      - output.turn_on: run_relay
+
+    close_action:
+      - output.turn_off: run_relay
+      - output.turn_on: direction_relay  # close polarity
+      - delay: 100ms
+      - output.turn_on: run_relay
+
+    stop_action:
+      - output.turn_off: run_relay
+      - output.turn_off: direction_relay # clean idle: both relays de-energised
+
+# -----------------------------------------------------------------------------
+# Manual buttons (internal — used only to drive the cover, not published to HA).
+# Pressing either button while the window is moving STOPS it (Tasmota
+# behaviour); otherwise it opens/closes fully.
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    id: open_button
+    pin:
+      number: GPIO12
+      mode: INPUT      # external 4.7k pull-up is on the board
+      inverted: true   # pressed = LOW -> ON
+    internal: true
+    filters:
+      - delayed_on_off: 30ms
+    on_press:
+      then:
+        - lambda: |-
+            if (id(window_cover).current_operation == CoverOperation::COVER_OPERATION_IDLE) {
+              id(window_cover).make_call().set_command_open().perform();
+            } else {
+              id(window_cover).make_call().set_command_stop().perform();
+            }
+
+  - platform: gpio
+    id: close_button
+    pin:
+      number: GPIO13
+      mode: INPUT
+      inverted: true
+    internal: true
+    filters:
+      - delayed_on_off: 30ms
+    on_press:
+      then:
+        - lambda: |-
+            if (id(window_cover).current_operation == CoverOperation::COVER_OPERATION_IDLE) {
+              id(window_cover).make_call().set_command_close().perform();
+            } else {
+              id(window_cover).make_call().set_command_stop().perform();
+            }
+
+# -----------------------------------------------------------------------------
+# Optional status LED strip (8x WS2812b) — internal status indicator.
+#
+# Mirrors the Tasmota rules:
+#   fully closed -> LED 1 red
+#   fully open   -> LED 8 green
+#   in between   -> LEDs 2..7 amber, lit proportionally to the position.
+# -----------------------------------------------------------------------------
+light:
+  - platform: neopixelbus
+    type: GRB
+    variant: WS2812
+    pin: GPIO2
+    num_leds: 8
+    id: status_light
+    name: "Status"
+    internal: true
+    default_transition_length: 0s
+
+script:
+  - id: update_status_led
+    then:
+      - lambda: |-
+          auto *state = id(status_light);
+          float pos = id(window_cover).position;  // 0.0 closed .. 1.0 open
+
+          // Keep the light "on" so addressable writes are applied.
+          auto call = state->turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(1.0);
+          call.perform();
+
+          // The addressable LED buffer lives on the light output, not the state.
+          auto *light = static_cast<esphome::light::AddressableLight *>(state->get_output());
+
+          light->all() = Color(0, 0, 0);
+
+          if (pos <= 0.001f) {
+            (*light)[0] = Color(16, 0, 0);   // closed: dim red
+          } else if (pos >= 0.999f) {
+            (*light)[7] = Color(0, 16, 0);   // open: dim green
+          } else {
+            // Progress: light LEDs 1..6 amber as position passes ~15%..90%.
+            int lit = static_cast<int>((pos * 100.0f - 15.0f) / 75.0f * 6.0f) + 1;
+            if (lit < 1) lit = 1;
+            if (lit > 6) lit = 6;
+            for (int i = 1; i <= lit; i++) {
+              (*light)[i] = Color(5, 5, 0);  // dim amber
+            }
+          }
+          light->schedule_show();
+
+# -----------------------------------------------------------------------------
+# Refresh the status LEDs: once per second and once on boot.
+# -----------------------------------------------------------------------------
+interval:
+  - interval: 1s
+    then:
+      - script.execute: update_status_led

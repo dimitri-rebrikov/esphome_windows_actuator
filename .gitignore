@@ -1,0 +1,26 @@
+# --- Credentials -----------------------------------------------------------
+# Real Wi-Fi / API credentials. Never commit this file.
+# The template (secrets.yaml.example) IS committed.
+secrets.yaml
+.env
+
+# --- ESPHome / PlatformIO build artifacts ----------------------------------
+.esphome/
+.pioenvs/
+.piolibdeps/
+
+# Compiled firmware images
+*.bin
+*.bin.gz
+*.elf
+*.map
+
+# Staged upload package (firmware/MANIFEST.txt + images)
+firmware/
+
+# --- Logs ------------------------------------------------------------------
+*.log
+
+# --- OS cruft --------------------------------------------------------------
+.DS_Store
+Thumbs.db
