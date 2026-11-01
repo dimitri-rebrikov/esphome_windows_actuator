@@ -34,8 +34,8 @@ Identical to the Tasmota project. Circuit diagram and assembly photos live in
 | D4          | GPIO2  | WS2812b data in                                      |
 | D2          | GPIO4  | Power relay + motor on/off (Tasmota Relay1) — "run"  |
 | D1          | GPIO5  | Direction/polarity relay (Tasmota Relay2)            |
-| D6          | GPIO12 | OPEN button (active-low, external 4.7 kΩ pull-up)    |
-| D7          | GPIO13 | CLOSE button (active-low, external 4.7 kΩ pull-up)   |
+| D6          | GPIO12 | CLOSE button (active-low, external 4.7 kΩ pull-up)   |
+| D7          | GPIO13 | OPEN button (active-low, external 4.7 kΩ pull-up)    |
 
 The relay module is **active-low** (Tasmota `Relay_i`): driving a GPIO **low**
 energises the corresponding relay.
@@ -56,7 +56,9 @@ switch together, which makes an H-bridge short circuit impossible.
 ## What the firmware does
 
 - **Cover** (`Window`, `device_class: window`) — time-based position tracking,
-  open `4 s`, close `6 s` (read from the device's Tasmota config).
+  defaults open `4 s` / close `6 s`.
+- **Adjustable times** — `Open Time` / `Close Time` number entities in Home
+  Assistant override those durations live and persist across reboots.
 - **Buttons** — OPEN/CLOSE drive the cover; pressing either while the window is
   moving **stops** it (same behaviour as the Tasmota `ShutterButton` setup).
 - **Status LEDs** — internal indicator:

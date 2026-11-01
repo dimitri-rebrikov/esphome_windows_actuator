@@ -14,8 +14,8 @@
 #     GPIO4 (D2) -> Relay1 = power relay + motor on/off relay     ("run")
 #     GPIO5 (D1) -> Relay2 = direction/polarity relay             ("direction")
 #     GPIO2 (D4) -> WS2812b data
-#     GPIO12 (D6) -> OPEN button   (active-low, external 4.7k pull-up)
-#     GPIO13 (D7) -> CLOSE button  (active-low, external 4.7k pull-up)
+#     GPIO12 (D6) -> CLOSE button  (active-low, external 4.7k pull-up)
+#     GPIO13 (D7) -> OPEN button   (active-low, external 4.7k pull-up)
 # =============================================================================
 
 substitutions:
@@ -31,8 +31,12 @@ esphome:
   friendly_name: ${friendly_name}
   comment: "12 V linear window actuator (WeMos D1 mini + 4-relay module)"
   on_boot:
-    then:
-      - script.execute: update_status_led
+    - priority: -100
+      then:
+        - script.execute: update_status_led
+        - lambda: |-
+            id(window_cover).set_open_duration(static_cast<uint32_t>(id(cover_open_time).state * 1000.0f));
+            id(window_cover).set_close_duration(static_cast<uint32_t>(id(cover_close_time).state * 1000.0f));
 
 esp8266:
   board: d1_mini
@@ -128,6 +132,43 @@ cover:
       - output.turn_off: direction_relay # clean idle: both relays de-energised
 
 # -----------------------------------------------------------------------------
+# Adjustable travel times (exposed to Home Assistant). Config defaults are
+# open_time/close_time; these numbers override them live and survive reboots.
+# -----------------------------------------------------------------------------
+number:
+  - platform: template
+    id: cover_open_time
+    name: "Open Time"
+    icon: mdi:timer-outline
+    unit_of_measurement: "s"
+    min_value: 0.5
+    max_value: 60
+    step: 0.1
+    mode: box
+    initial_value: 4
+    restore_value: true
+    optimistic: true
+    on_value:
+      - lambda: |-
+          id(window_cover).set_open_duration(static_cast<uint32_t>(x * 1000.0f));
+
+  - platform: template
+    id: cover_close_time
+    name: "Close Time"
+    icon: mdi:timer-outline
+    unit_of_measurement: "s"
+    min_value: 0.5
+    max_value: 60
+    step: 0.1
+    mode: box
+    initial_value: 6
+    restore_value: true
+    optimistic: true
+    on_value:
+      - lambda: |-
+          id(window_cover).set_close_duration(static_cast<uint32_t>(x * 1000.0f));
+
+# -----------------------------------------------------------------------------
 # Manual buttons (internal — used only to drive the cover, not published to HA).
 # Pressing either button while the window is moving STOPS it (Tasmota
 # behaviour); otherwise it opens/closes fully.
@@ -136,7 +177,7 @@ binary_sensor:
   - platform: gpio
     id: open_button
     pin:
-      number: GPIO12
+      number: GPIO13
       mode: INPUT      # external 4.7k pull-up is on the board
       inverted: true   # pressed = LOW -> ON
     internal: true
@@ -154,7 +195,7 @@ binary_sensor:
   - platform: gpio
     id: close_button
     pin:
-      number: GPIO13
+      number: GPIO12
       mode: INPUT
       inverted: true
     internal: true
